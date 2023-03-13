@@ -1,8 +1,29 @@
+from statistics import mean
+
 import numpy as np
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
 import math
+import itertools
+
+from scipy.stats import stats
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split, cross_val_score, KFold
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+
+from sklearn import metrics
+
+from ipywidgets import IntProgress
+from IPython.display import display
+from imblearn.over_sampling import SMOTE
+
+from sklearn.preprocessing import MinMaxScaler
 
 class WineDataSet:
     red_wine_file = 'winequality/winequality-red.csv'
@@ -25,6 +46,7 @@ class WineDataSet:
     ds_red = None
     ds_white = None
     ds = None
+    price_ds = None
 
     b = 2
 
@@ -212,6 +234,9 @@ class WineDataSet:
     def chart_sweetness_citric_acid(self):
         sns.barplot(x='sweetness', y='citric acid', data=self.ds, estimator=np.mean).set(title='Citric acid and wine sweetness')
 
+
+
+
     """
         Returns the copy of the data set with only parameters relevant for ML
     """
@@ -225,6 +250,336 @@ class WineDataSet:
             'sulphates',
             'alcohol'
         ]]
+
+    ml_pipeline = []
+
+    ml_pipeline_algs = [
+        'Logistic Regression',
+        'SVM',
+        'KNN',
+        'Decision Tree',
+        'Random Forest',
+        'Naive Bayes'
+    ]
+    wine_feature_combinations = []
+
+    ml_evaluation = []
+
+    def gen_pipeline(self):
+        self.ml_pipeline = []
+        self.ml_pipeline.append(LogisticRegression(solver='liblinear'))
+        self.ml_pipeline.append(SVC())
+        self.ml_pipeline.append(KNeighborsClassifier())
+        self.ml_pipeline.append(DecisionTreeClassifier())
+        self.ml_pipeline.append(RandomForestClassifier(
+            n_estimators=1000,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_depth=50,
+            bootstrap=False
+        ))
+        self.ml_pipeline.append(GaussianNB())
+
+    """
+        Find all possible feature combinations for the wine
+    """
+    def gen_all_feature_combos(self):
+
+        wine_features = [
+            'residual sugar',
+            'chlorides',
+            'total sulfur dioxide',
+            'density',
+            'pH',
+            'sulphates',
+            'alcohol'
+        ]
+        wine_feature_combinations = []
+
+        for L in range(len(wine_features) + 1):
+            for subset in itertools.combinations(wine_features, L):
+                if len(subset) > 6:
+                    wine_feature_combinations.append(subset)
+
+        self.wine_feature_combinations = wine_feature_combinations
+
+    def split_ml_data(self):
+        pass
+
+    def evaluate_ml(self, smote=False, show_progress=True, random_state=1):
+        y = self.ds['quality_label']
+
+        # check_features = self.wine_feature_combinations
+        check_features = [[
+            'residual sugar',
+            'chlorides',
+            'total sulfur dioxide',
+            'density',
+            'pH',
+            'sulphates',
+            'alcohol'
+        ]]
+
+        if show_progress:
+            i = 0
+            i_max = len(check_features) * len(self.ml_pipeline)
+            f = IntProgress(min=0, max=i_max)  # instantiate the bar
+            display(f)  # display the bar
+
+        self.ml_evaluation = []
+
+        for features in check_features:
+            for model in self.ml_pipeline:
+                x = self.ds.copy(deep=True)
+                X = x[list(features)]
+
+                if smote:
+                    sm = SMOTE(random_state=random_state)
+                    X_res, y_res = sm.fit_resample(X, y)
+                else:
+                    X_res = X
+                    y_res = y
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X_res, y_res,
+                    train_size=0.8,
+                    random_state=random_state,
+                )
+
+                # normalize data
+                norm = MinMaxScaler().fit(X_train)
+                # transform training data
+                X_train = norm.transform(X_train)
+                # transform testing data
+                X_test = norm.transform(X_test)
+
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+
+                cross_val = cross_val_score(model, X_res, y_res)
+                self.ml_evaluation.append({
+                    'features': features,
+                    'algo': model,
+                    'cohen kappa score': metrics.cohen_kappa_score(y_test, y_pred),
+                    'cross val score': cross_val,
+                    'cross val mean': mean(cross_val),
+                    'classification report': metrics.classification_report(y_test, y_pred),
+                    'confusion matrix': confusion_matrix(y_test, y_pred)
+                })
+                if show_progress:
+                    f.value += 1
+                    i += 1
+
+        return sorted(self.ml_evaluation, key=lambda x: x['cross val mean'])
+
+    def get_Xy(self, random_state=1, wine_type=None, smote=True, include_high=True):
+        x = self.ds.copy(deep=True)
+
+        if wine_type:
+            x = x[x['type'] == wine_type]
+
+        if not include_high:
+            x = x[x['quality_label'] != 'high']
+
+        y = x['quality_label']
+        X = x[[
+            'residual sugar',
+            'chlorides',
+            'total sulfur dioxide',
+            'density',
+            'pH',
+            'sulphates',
+            'alcohol'
+        ]]
+
+        from sklearn.preprocessing import MinMaxScaler
+
+        if smote:
+            sm = SMOTE(random_state=random_state)
+            X_res, y_res = sm.fit_resample(X, y)
+            return X_res, y_res
+        else:
+            return X, y
+
+    def split_Xy(self, X, y, random_state=1, normalize=False):
+        X_train, X_test, y_train, y_test =  train_test_split(X, y, train_size=0.8, random_state=random_state)
+
+        if normalize:
+            # fit scaler on training data
+            norm = MinMaxScaler().fit(X_train)
+
+            # transform training data
+            X_train = norm.transform(X_train)
+
+            # transform testing data
+            X_test = norm.transform(X_test)
+
+        return X_train, X_test, y_train, y_test
+
+    # {'features': ('residual sugar',
+    #               'chlorides',
+    #               'total sulfur dioxide',
+    #               'density',
+    #               'pH',
+    #               'sulphates',
+    #               'alcohol'),
+    #  'algo': RandomForestClassifier(),
+    #  'accuracy score': 0.8693060876968923,
+    #  'cohen kappa score': 0.8039990400303537,
+    #  'classification report': '              precision    recall  f1-score   support\n\n        high       0.94      0.99      0.96       753\n         low       0.82      0.87      0.85       796\n      medium       0.85      0.76      0.80       800\n\n    accuracy                           0.87      2349\n   macro avg       0.87      0.87      0.87      2349\nweighted avg       0.87      0.87      0.87      2349\n'}
+
+
+    def best_rfc_params(self):
+        # RandomizedSearchCV
+        # https://towardsdatascience.com/hyperparameter-tuning-the-random-forest-in-python-using-scikit-learn-28d2aa77dd74
+        from sklearn.model_selection import RandomizedSearchCV
+
+        # Number of trees in random forest
+        n_estimators = [int(x) for x in np.linspace(start=200, stop=2000, num=10)]
+        # Maximum number of levels in tree
+        max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+        max_depth.append(None)
+        # Minimum number of samples required to split a node
+        min_samples_split = [2, 5, 10]
+        # Minimum number of samples required at each leaf node
+        min_samples_leaf = [1, 2, 4]
+        # Method of selecting samples for training each tree
+        bootstrap = [True, False]  # Create the random grid
+        random_grid = {'n_estimators': n_estimators,
+                       'max_depth': max_depth,
+                       'min_samples_split': min_samples_split,
+                       'min_samples_leaf': min_samples_leaf,
+                       'bootstrap': bootstrap}
+
+        # Use the random grid to search for best hyperparameters
+        # First create the base model to tune
+        rf = RandomForestClassifier()
+        # Random search of parameters, using 3 fold cross validation,
+        # search across 100 different combinations, and use all available cores
+        rf_random = RandomizedSearchCV(
+            estimator=rf,
+            param_distributions=random_grid,
+            n_iter=100, cv=3, verbose=2,
+            random_state=42, n_jobs=-1
+        )  # Fit the random search model
+
+        X, y = self.get_Xy()
+        X_train, X_test, y_train, y_test = self.split_Xy(X, y)
+
+        rf_random.fit(X_train, y_train)
+        return rf_random.best_params_
+
+    def best_decision_tree_params(self):
+        # RandomizedSearchCV
+        # https://towardsdatascience.com/hyperparameter-tuning-the-random-forest-in-python-using-scikit-learn-28d2aa77dd74
+        from sklearn.model_selection import RandomizedSearchCV
+
+        # Number of trees in random forest
+        n_estimators = [int(x) for x in np.linspace(start=200, stop=2000, num=10)]
+        # Maximum number of levels in tree
+        max_depth = [int(x) for x in np.linspace(10, 110, num=11)]
+        max_depth.append(None)
+        # Minimum number of samples required to split a node
+        min_samples_split = [2, 5, 10]
+        # Minimum number of samples required at each leaf node
+        min_samples_leaf = [1, 2, 4]
+        # Method of selecting samples for training each tree
+        bootstrap = [True, False]  # Create the random grid
+        random_grid = {'n_estimators': n_estimators,
+                       'max_depth': max_depth,
+                       'min_samples_split': min_samples_split,
+                       'min_samples_leaf': min_samples_leaf,
+                       'bootstrap': bootstrap}
+
+        # Use the random grid to search for best hyperparameters
+        # First create the base model to tune
+        rf = RandomForestClassifier()
+        # Random search of parameters, using 3 fold cross validation,
+        # search across 100 different combinations, and use all available cores
+        rf_random = RandomizedSearchCV(
+            estimator=rf,
+            param_distributions=random_grid,
+            n_iter=100, cv=3, verbose=2,
+            random_state=42, n_jobs=-1
+        )  # Fit the random search model
+
+        X, y = self.get_Xy()
+        X_train, X_test, y_train, y_test = self.split_Xy(X, y)
+
+        rf_random.fit(X_train, y_train)
+        return rf_random.best_params_
+
+    # {'n_estimators': 1000,
+    # 'min_samples_split': 2,
+    # 'min_samples_leaf': 1,
+    # 'max_features': 'auto',
+    # 'max_depth': 50,
+    # 'bootstrap': False}
+
+    def learn_rfc(self, random_state=1, wine_type=None, smote=True, include_high=True):
+        X, y = self.get_Xy(random_state=random_state, wine_type=wine_type, smote=smote, include_high=include_high)
+        X_train, X_test, y_train, y_test = self.split_Xy(X, y, random_state=random_state)
+        model = RandomForestClassifier(
+            n_estimators=1000,
+            min_samples_split=2,
+            min_samples_leaf=1,
+            max_depth=50,
+            bootstrap=False
+        )
+
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+
+        print('===================', wine_type, '===================')
+        print('accuracy score', metrics.accuracy_score(y_test, y_pred))
+        print('cohen kappa score', metrics.cohen_kappa_score(y_test, y_pred))
+        print('cross val score', cross_val_score(model, X, y))
+        print('classification report', metrics.classification_report(y_test, y_pred))
+
+        return {
+            'confusion matrix': confusion_matrix(y_test, y_pred)
+        }
+
+    def print_confusion_matrix(self, cm):
+        sns.set_context('talk', font_scale=1.5)
+        plt = sns.heatmap(cm, annot=True, fmt=".5g", cmap='Blues_r')
+        plt.set_xlabel('Predicted values')
+        plt.set_ylabel('Actual values')
+
+    def add_price_data(self):
+        price_ds = pd.read_csv('winequality/wine_sales_data.csv', sep=",")
+
+        # leave only Portugal's Vinho Verde
+        price_ds = price_ds[(price_ds['province'] == 'Vinho Verde') & (price_ds['country'] == 'Portugal')]
+
+        # remove price outliers
+        Q1 = price_ds["price"].quantile(0.25)
+        Q3 = price_ds["price"].quantile(0.75)
+        IQR = Q3 - Q1
+        price_ds = price_ds.query('(@Q1 - 1.5 * @IQR) <= price <= (@Q3 + 1.5 * @IQR)')
+
+        display(price_ds)
+
+        # sort by price and leave only that
+        price_ds = price_ds.sort_values('price', axis=0)
+        price_ds = price_ds['price']
+
+
+
+        min_price = min(price_ds)
+        max_price = max(price_ds)
+        price_split = max_price - min_price
+        price_step = price_split // 3
+
+        med_q_pr = min_price + price_step
+        hi_q_pr = max_price - price_step
+
+        print(f"Low quality price: {min_price} - {med_q_pr-1}")
+        print(f"Mid quality price: {med_q_pr} - {hi_q_pr}")
+        print(f"High quality price: {hi_q_pr+1} - {max_price}")
+
+
+
 
 
 
