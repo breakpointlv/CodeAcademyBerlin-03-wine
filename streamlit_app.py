@@ -95,43 +95,43 @@ with st.sidebar:
     # https://docs.streamlit.io/library/api-reference/widgets/st.slider
     alcohol = st.slider(
         'Alcohol (%)',
-        min_value=7, max_value=16, value=None, step=1,
+        min_value=7, max_value=16, value=9, step=1,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     suplhates = st.slider(
         'Sulphates',
-        min_value=0.2, max_value=2.0, value=None, step=0.1,
+        min_value=0.2, max_value=2.0, value=0.6, step=0.1,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     ph = st.slider(
         'pH',
-        min_value=2.5, max_value=4.5, value=None, step=0.1,
+        min_value=2.5, max_value=4.5, value=3.0, step=0.1,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     density = st.slider(
         'Density',
-        min_value=0.9, max_value=1.1, value=None, step=0.05,
+        min_value=0.9, max_value=1.1, value=0.95, step=0.01,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     so2 = st.slider(
         'Total sulfur dioxide',
-        min_value=5, max_value=450, value=None, step=5,
+        min_value=5, max_value=450, value=30, step=70,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     chlorides = st.slider(
         'Chlorides',
-        min_value=0.0, max_value=0.7, value=None, step=0.02,
+        min_value=0.0, max_value=0.7, value=0.1, step=0.02,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
     res_sugar = st.slider(
         'Residual sugar',
-        min_value=0.5, max_value=70., value=None, step=1.,
+        min_value=0.5, max_value=70., value=10.0, step=1.,
         format=None, key=None, help=None, on_change=None, disabled=False, label_visibility="visible"
     )
 
