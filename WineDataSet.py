@@ -10,7 +10,7 @@ import itertools
 from scipy.stats import stats
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.model_selection import train_test_split, cross_val_score, KFold
 from sklearn.naive_bayes import GaussianNB
 from sklearn.neighbors import KNeighborsClassifier
@@ -24,6 +24,8 @@ from IPython.display import display
 from imblearn.over_sampling import SMOTE
 
 from sklearn.preprocessing import MinMaxScaler
+
+import pickle
 
 class WineDataSet:
     red_wine_file = 'winequality/winequality-red.csv'
@@ -47,6 +49,9 @@ class WineDataSet:
     ds_white = None
     ds = None
     price_ds = None
+
+    quality_model = None
+    type_model = None
 
     b = 2
 
@@ -126,6 +131,9 @@ class WineDataSet:
 
     def sv(self):
         import time
+
+        sns.set_context('talk', font_scale=5)
+        sns.set_palette('dark')
 
         sns.set(rc={'figure.figsize': (25, 15),
                     "ytick.color": "w",
@@ -303,11 +311,84 @@ class WineDataSet:
 
         self.wine_feature_combinations = wine_feature_combinations
 
-    def split_ml_data(self):
-        pass
 
-    def evaluate_ml(self, smote=False, show_progress=True, random_state=1):
-        y = self.ds['quality_label']
+    def evaluate_ml(self, smote=False, show_progress=True, random_state=1, wine_type=None):
+        if wine_type:
+            y = self.ds[self.ds['type'] == wine_type]
+            y = y['quality_label']
+        else:
+            y = self.ds['quality_label']
+
+        # check_features = self.wine_feature_combinations
+        check_features = [[
+            'residual sugar',
+            'chlorides',
+            'total sulfur dioxide',
+            'density',
+            'pH',
+            'sulphates',
+            'alcohol'
+        ]]
+
+        if show_progress:
+            i = 0
+            i_max = len(check_features) * len(self.ml_pipeline)
+            f = IntProgress(min=0, max=i_max)  # instantiate the bar
+            display(f)  # display the bar
+
+        self.ml_evaluation = []
+
+        for features in check_features:
+            for model in self.ml_pipeline:
+                x = self.ds.copy(deep=True)
+
+                if wine_type:
+                    x = x[x['type'] == wine_type]
+
+                X = x[list(features)]
+
+                if smote:
+                    sm = SMOTE(random_state=random_state)
+                    X_res, y_res = sm.fit_resample(X, y)
+                else:
+                    X_res = X
+                    y_res = y
+
+                X_train, X_test, y_train, y_test = train_test_split(
+                    X_res, y_res,
+                    train_size=0.8,
+                    random_state=random_state,
+                )
+
+                # normalize data
+                norm = MinMaxScaler().fit(X_train)
+                # transform training data
+                X_train = norm.transform(X_train)
+                # transform testing data
+                X_test = norm.transform(X_test)
+
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+
+                cross_val = cross_val_score(model, X_res, y_res)
+                self.ml_evaluation.append({
+                    'features': features,
+                    'algo': model,
+                    'cohen kappa score': metrics.cohen_kappa_score(y_test, y_pred),
+                    'cross val score': cross_val,
+                    'cross val mean': mean(cross_val),
+                    'classification report': metrics.classification_report(y_test, y_pred, output_dict=True),
+                    'confusion matrix': confusion_matrix(y_test, y_pred)
+                })
+                if show_progress:
+                    f.value += 1
+                    i += 1
+
+        return sorted(self.ml_evaluation, key=lambda x: x['cross val mean'])
+
+    def evaluate_ml_for_type(self, smote=False, show_progress=True, random_state=1):
+
+        y = self.ds['type']
 
         # check_features = self.wine_feature_combinations
         check_features = [[
@@ -363,7 +444,7 @@ class WineDataSet:
                     'cohen kappa score': metrics.cohen_kappa_score(y_test, y_pred),
                     'cross val score': cross_val,
                     'cross val mean': mean(cross_val),
-                    'classification report': metrics.classification_report(y_test, y_pred),
+                    'classification report': metrics.classification_report(y_test, y_pred, output_dict=True),
                     'confusion matrix': confusion_matrix(y_test, y_pred)
                 })
                 if show_progress:
@@ -382,6 +463,30 @@ class WineDataSet:
             x = x[x['quality_label'] != 'high']
 
         y = x['quality_label']
+        X = x[[
+            'residual sugar',
+            'chlorides',
+            'total sulfur dioxide',
+            'density',
+            'pH',
+            'sulphates',
+            'alcohol'
+        ]]
+
+        from sklearn.preprocessing import MinMaxScaler
+
+        if smote:
+            sm = SMOTE(random_state=random_state)
+            X_res, y_res = sm.fit_resample(X, y)
+            return X_res, y_res
+        else:
+            return X, y
+
+
+    def get_Xy_type(self, random_state=1, smote=True):
+        x = self.ds.copy(deep=True)
+
+        y = x['type']
         X = x[[
             'residual sugar',
             'chlorides',
@@ -507,6 +612,7 @@ class WineDataSet:
         X_train, X_test, y_train, y_test = self.split_Xy(X, y)
 
         rf_random.fit(X_train, y_train)
+
         return rf_random.best_params_
 
     # {'n_estimators': 1000,
@@ -516,8 +622,41 @@ class WineDataSet:
     # 'max_depth': 50,
     # 'bootstrap': False}
 
-    def learn_rfc(self, random_state=1, wine_type=None, smote=True, include_high=True):
+    def learn_rfc(self, random_state=1, wine_type=None, smote=True, include_high=True, from_cache=True):
         X, y = self.get_Xy(random_state=random_state, wine_type=wine_type, smote=smote, include_high=include_high)
+        X_train, X_test, y_train, y_test = self.split_Xy(X, y, random_state=random_state)
+        if from_cache and self.quality_model:
+            model = self.quality_model
+        else:
+            model = RandomForestClassifier(
+                n_estimators=1000,
+                min_samples_split=2,
+                min_samples_leaf=1,
+                max_depth=50,
+                bootstrap=False
+            )
+
+            model.fit(X_train, y_train)
+            self.quality_model = model
+            pickle.dump(model, open('wine-quality.pkl', 'wb'))
+
+        y_pred = model.predict(X_test)
+
+        cr_val_score = cross_val_score(model, X, y)
+        print('===================', wine_type, '===================')
+        print('accuracy score', metrics.accuracy_score(y_test, y_pred))
+        print('cohen kappa score', metrics.cohen_kappa_score(y_test, y_pred))
+        print('cross val score', cr_val_score)
+        print('cross val score mean', mean(cr_val_score))
+        print('classification report', metrics.classification_report(y_test, y_pred))
+        print("Confusion matrix:")
+        cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
+        a = pd.DataFrame(cm, index=model.classes_, columns=model.classes_)
+        display(a)
+
+
+    def learn_rfc_type(self, random_state=1, smote=True):
+        X, y = self.get_Xy_type(random_state=random_state, smote=smote)
         X_train, X_test, y_train, y_test = self.split_Xy(X, y, random_state=random_state)
         model = RandomForestClassifier(
             n_estimators=1000,
@@ -528,19 +667,24 @@ class WineDataSet:
         )
 
         model.fit(X_train, y_train)
+
+        pickle.dump(model, open('wine-type.pkl', 'wb'))
+
         y_pred = model.predict(X_test)
 
-        print('===================', wine_type, '===================')
+        cr_val_score = cross_val_score(model, X, y)
         print('accuracy score', metrics.accuracy_score(y_test, y_pred))
         print('cohen kappa score', metrics.cohen_kappa_score(y_test, y_pred))
-        print('cross val score', cross_val_score(model, X, y))
+        print('cross val score', cr_val_score)
+        print('cross val score mean', mean(cr_val_score))
         print('classification report', metrics.classification_report(y_test, y_pred))
-
-        return {
-            'confusion matrix': confusion_matrix(y_test, y_pred)
-        }
+        print("Confusion matrix:")
+        cm = confusion_matrix(y_test, y_pred, labels=model.classes_)
+        a = pd.DataFrame(cm, index=model.classes_, columns=model.classes_)
+        display(a)
 
     def print_confusion_matrix(self, cm):
+        ConfusionMatrixDisplay()
         sns.set_context('talk', font_scale=1.5)
         plt = sns.heatmap(cm, annot=True, fmt=".5g", cmap='Blues_r')
         plt.set_xlabel('Predicted values')
@@ -565,18 +709,68 @@ class WineDataSet:
         price_ds = price_ds['price']
 
 
+        wine_cnt = len(price_ds)
+        low_cnt = round(wine_cnt * 0.37)
+        med_cnt = round(wine_cnt * 0.60)
+        hi_cnt = wine_cnt - low_cnt - med_cnt
+
 
         min_price = min(price_ds)
         max_price = max(price_ds)
+        median_price = price_ds.median()
+        mean_price = price_ds.mean()
         price_split = max_price - min_price
         price_step = price_split // 3
 
         med_q_pr = min_price + price_step
         hi_q_pr = max_price - price_step
 
+        print('LOW QUALITY')
+        low_q = price_ds.iloc[0:low_cnt]
+        print(f"Low cnt: {low_cnt}")
+        print(f"min price: {min(low_q)}")
+        print(f"max price: {max(low_q)}")
+        print(f"mean price: {low_q.mean()}")
+        print(f"median price: {low_q.median()}")
+
+        print('-------------------------')
+
+        print('MEDIUM QUALITY')
+        med_q = price_ds.iloc[low_cnt:low_cnt+med_cnt]
+        print(f"cnt: {med_cnt}")
+        print(f"min price: {min(med_q)}")
+        print(f"max price: {max(med_q)}")
+        print(f"mean price: {med_q.mean()}")
+        print(f"median price: {med_q.median()}")
+
+        print('-------------------------')
+
+        print('HIGH QUALITY')
+        hi_q = price_ds.iloc[low_cnt + med_cnt:]
+        print(f"cnt: {hi_cnt}")
+        print(f"min price: {min(hi_q)}")
+        print(f"max price: {max(hi_q)}")
+        print(f"mean price: {hi_q.mean()}")
+        print(f"median price: {hi_q.median()}")
+
+
+        print(f"Med cnt: {med_cnt}")
+        print(f"High cnt: {hi_cnt}")
+        print(f"Median price: {median_price}")
+        print(f"Median price: {mean_price}")
         print(f"Low quality price: {min_price} - {med_q_pr-1}")
         print(f"Mid quality price: {med_q_pr} - {hi_q_pr}")
         print(f"High quality price: {hi_q_pr+1} - {max_price}")
+        sns.set_context('talk', font_scale=1.5)
+        sns.histplot(price_ds)
+        self.sv()
+
+    def leave_one_out_validate(self):
+        from sklearn.model_selection import LeaveOneOut, cross_val_score
+        wine_quality_model = pickle.load(open('wine-quality.pkl', 'rb'))
+        X, y = self.get_Xy()
+        scores = cross_val_score(wine_quality_model, X, y, cv=LeaveOneOut())
+        return scores.mean()
 
 
 
